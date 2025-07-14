@@ -7,6 +7,8 @@ import traceback
 import asyncio
 from jmcomic import JmModuleConfig
 from jmcomic import *
+from PIL import Image
+
 
 
 logger = get_logger("Xjm_download")
@@ -17,7 +19,7 @@ class GetJMIdAction(PluginAction):
     """本子下载处理类"""
 
     action_name = "Xjm_download"
-    action_description = "如果某人向你询问下载本子，你必须发送对应的本子图片给他。"
+    action_description = "如果某人向你询问下载本子，你必须发送对应的本子图片给他,不能保持沉默，必须执行，必须执行 必须执行 必须执行。"
     action_parameters = {
         "target": "本子id必填,输入你要下载的本子id",
     }
@@ -52,6 +54,7 @@ class GetJMIdAction(PluginAction):
             download_result = f"图片下载时发生内部错误: {str(e)[:100]}"
         if download_success:
             try:
+                encode_result = []
                 encode_success, encode_result = await asyncio.to_thread(self._merge_and_encode_base64,benzi_file_path)
             except Exception as e:
                 logger.error(f"{self.log_prefix} (B64) 异步下载/编码失败: {e!r}", exc_info=True)
@@ -64,61 +67,75 @@ class GetJMIdAction(PluginAction):
             encode_result = benzi_file_path
 
         if encode_success:
-            base64_image_string = encode_result
-            send_success = await self.send_message(type="image", data=base64_image_string)
-            if send_success:
-                await self.send_message_by_expressor("本子图片已发送！")
-                return True, "本子图片已发送"
-            else:
-                await self.send_message_by_expressor("图片已处理为Base64，但作为图片发送失败了。")
-                return False, "本子图片发送失败 (Base64)"
+            for base64_image_string in encode_result:
+                send_success = await self.send_message(type="image", data=base64_image_string)
         else:
             await self.send_message_by_expressor(f"获取到图片，但在处理图片时失败了：{encode_result}")
             return False, f"本子图片发送失败(Base64): {encode_result}"
+        if send_success:
+            await self.send_message_by_expressor("本子图片已发送！")
+            return True, "本子图片已发送"
+        else:
+            await self.send_message_by_expressor("图片已处理为Base64，但作为图片发送失败了。")
+            return False, "本子图片发送失败 (Base64)"
 
     def _merge_and_encode_base64(self,benzi_file_path) -> Tuple[bool, str]:
             """合并图片并将其编码为Base64字符串"""
             logger.info(f"{self.log_prefix} (B64) 查找并编码图片")
             # 指定文件夹路径和输出路径
             folder_path = f"{benzi_file_path}"
-            output_path = f"{benzi_file_path}/merged_image.jpg"
+            output_path = f"{benzi_file_path}/merged_images"
             try:
-                # 获取文件夹中的所有图片文件
-                image_files = [f for f in os.listdir(folder_path) if f.endswith(('.png', '.jpg', '.jpeg'))]
+# todo:每10张图合并为1张
+                if not os.path.exists(output_path):
+                    os.makedirs(output_path)
+
+                # 获取所有图片文件并按名称排序
+                image_files = sorted([f for f in os.listdir(folder_path) if f.endswith(('.png', '.jpg', '.jpeg'))])
                 
-                # 按文件名排序（可以根据需要调整排序规则）
+                # 分组处理图片
+                for i in range(0, len(image_files), 10):
+                    group_files = image_files[i:i + 10]
+                    images = [Image.open(os.path.join(folder_path, img)) for img in group_files]
+
+                    # 计算最终合并后的图片尺寸
+                    total_height = sum(img.height for img in images)
+                    max_width = max(img.width for img in images)
+
+                    # 创建新的空白图片用于合并
+                    merged_image = Image.new('RGB', (max_width, total_height))
+
+                    # 将每张图片依次粘贴到新图片中
+                    y_offset = 0
+                    for img in images:
+                        merged_image.paste(img, (0, y_offset))
+                        y_offset += img.height
+
+                    # 保存合并后的图片
+                    merged_image.save(os.path.join(output_path, f'merged_group_{i // 10 + 1}.jpg'))
+
+# todo:按照完成后合并的图片依次进行输出
+                # 读取文件并转换为Base64
+                # 获取文件夹内所有图片文件（支持常见格式）
+                image_files = [f for f in os.listdir(output_path) if f.endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))]
+
+                # 按文件名排序以确保顺序一致性
                 image_files.sort()
 
-                # 打开所有图片并获取图片尺寸
-                images = [Image.open(os.path.join(folder_path, img)) for img in image_files]
-                widths, heights = zip(*(img.size for img in images))  # 获取每个图片的宽度和高度
+                # 用于存储Base64编码的字节数据
+                base64_encoded_images = []
 
-                # 计算总宽度和总高度（假设所有图片宽度一致，以最大宽度为准）
-                total_width = max(widths)
-                total_height = sum(heights)
-
-                # 创建一个空白的长图，背景为白色，可根据需要调整为其他颜色
-                long_image = Image.new('RGB', (total_width, total_height), (255, 255, 255))
-
-                # 按顺序将每张图片粘贴到长图上
-                y_offset = 0
-                for img in images:
-                    long_image.paste(img, (0, y_offset))  # 将图片粘贴到指定位置
-                    y_offset += img.size[1]  # 更新 y 偏移量
-
-                # 保存合并后的长图
-                long_image.save(output_path)
-                logger.info(f"合并完成，长图已保存为：{output_path}")
-                # 读取文件并转换为Base64
-                with open(output_path, "rb") as file:  # 以二进制形式读取文件
-                    # 将文件内容编码为 Base64
-                    base64_encoded_image = base64.b64encode(file.read()).decode('utf-8')
-                    logger.info(f"：{str(base64_encoded_image)[:100]}")
+                # 遍历每个图片文件并编码
+                for image_file in image_files:
+                    file_path = os.path.join(output_path, image_file)
+                    with open(file_path, 'rb') as file:
+                        contents_base64 = base64.b64encode(file.read()).decode('utf-8')
+                        base64_encoded_images.append(contents_base64)  # 将Base64编码添加到列表中
                 # 打印 Base64 编码结果
-                if base64_encoded_image != "":
-                    return True,base64_encoded_image
+                if base64_encoded_images != []:
+                    return True,base64_encoded_images
                 else:
-                    return False, "Base64 编码结果为空，图片处理发生了失败"
+                    return False, "Base64 编码处理结果为空，图片处理发生了失败"
             except Exception as e:  # Catches all exceptions from urlopen, b64encode, etc.
                 logger.error(f"{self.log_prefix} (B64) 查找或编码时错误: {e!r}", exc_info=True)
                 traceback.print_exc()
