@@ -147,7 +147,6 @@ class GetJMIdAction(PluginAction):
         logger.info(f"{self.log_prefix} 下载图片中")
         try:
             # 2. 调用下载api，把option作为参数传递 
-            JmModuleConfig.PFIELD_ADVICE['myname'] = lambda photo: f'{photo.id}'
             option = create_option_by_file('D:/BaiduSyncdisk/code_space/jm/a.yml')  # 通过配置文件来创建option对象
             download_album(target, option)
             return True,f"D:/test/{target}"
